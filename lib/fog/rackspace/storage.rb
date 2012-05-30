@@ -117,9 +117,6 @@ module Fog
         end
 
         def request(params, parse_json = true, &block)
-          if Time.now > @auth_token_expiration then
-		self.reload
-	  end
           begin
             response = @connection.request(params.merge!({
               :headers  => {
