@@ -77,6 +77,20 @@ module Fog
         include Utils
         attr_reader :rackspace_cdn_ssl
 
+        def authenticate
+          if @rackspace_must_reauthenticate || @rackspace_auth_token.nil?
+            options = {
+              :rackspace_api_key  => @rackspace_api_key,
+              :rackspace_username => @rackspace_username,
+              :rackspace_auth_url => @rackspace_auth_url
+            }
+            credentials = Fog::Rackspace.authenticate(options, @connection_options)
+            @auth_token = credentials['X-Auth-Token']
+          else
+            @auth_token = @rackspace_auth_token
+          end
+	end
+
         def initialize(options={})
           require 'mime/types'
           @rackspace_api_key = options[:rackspace_api_key]
@@ -85,7 +99,8 @@ module Fog
           @rackspace_auth_url = options[:rackspace_auth_url]
           @connection_options     = options[:connection_options] || {}
           credentials = Fog::Rackspace.authenticate(options, @connection_options)
-          @auth_token = credentials['X-Auth-Token']
+	  @rackspace_must_reauthenticate = false
+          authenticate
 
           uri = URI.parse(credentials['X-Storage-Url'])
           @host       = options[:rackspace_servicenet] == true ? "snet-#{uri.host}" : uri.host
@@ -102,6 +117,9 @@ module Fog
         end
 
         def request(params, parse_json = true, &block)
+          if Time.now > @auth_token_expiration then
+		self.reload
+	  end
           begin
             response = @connection.request(params.merge!({
               :headers  => {
@@ -111,6 +129,14 @@ module Fog
               :host     => @host,
               :path     => "#{@path}/#{params[:path]}",
             }), &block)
+          rescue Excon::Errors::Unauthorized => error
+            if error.response.body != 'Bad username or password' # token expiration
+              @rackspace_must_reauthenticate = true
+              authenticate
+              retry
+            else # bad credentials
+              raise error
+            end
           rescue Excon::Errors::HTTPStatusError => error
             raise case error
             when Excon::Errors::NotFound
